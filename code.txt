@@ -1,0 +1,281 @@
+/* Include core modules */
+#include "stm32f4xx.h"
+#include <stdio.h>
+#include <string.h>
+/* Include my libraries here */
+#include "defines.h"
+#include "attributes.h"
+#include "tm_stm32f4_usart.h"
+#include "tm_stm32f4_delay.h"
+#include "tm_stm32f4_disco.h"
+#include "tm_stm32f4_ds18b20.h"
+#include "tm_stm32f4_onewire.h"
+#include "tm_stm32f4_rtc.h"
+#include "tm_stm32f4_hcsr04.h"
+
+#define EXPECTING_SENSORS	2
+char Ti_buf[50];
+TM_RTC_Time_t datatime;	
+
+int main(void) {
+char REP[100],mybuffer[1024],TEMP[5],TIME0[5],TIME1[5],TIME2[5],Tm0[5],Tm1[5];
+uint8_t x,y,z,a,b;																				
+uint8_t i,j,f;	
+uint8_t h_F,m_F,d_E,h_E,m_E,but_fe,ti_fe;	
+uint8_t flag_Aer,flag_Feed,flag_Time1,flag_Time2,flag_RTC,flag_Water	;
+char set_time[]="status: setime";
+char onfeed[]="ON1";
+char offeed[]="OFF1";
+char onaer[]="ON2";
+char offaer[]="OFF2";	
+char reset[]="reset";
+char buf[40];
+uint8_t device[EXPECTING_SENSORS][8];
+float temps[EXPECTING_SENSORS];
+TM_HCSR04_t HCSR04;
+    /* Initialize system */
+	
+		TM_OneWire_t OneWire1;
+    SystemInit();
+		TM_DELAY_Init();
+		TM_DISCO_LedInit();
+		TM_DISCO_ButtonInit();
+	
+	    /* Initialize USART1 at 9600 baud, TX: PB6, RX: PB7 */
+    TM_USART_Init(USART1, TM_USART_PinsPack_2, 115200);
+		/* Initialize USART2 at 9600 baud, TX: PD5, RX: PD6 */
+    TM_USART_Init(USART2, TM_USART_PinsPack_2, 115200);
+//------- config RTC ----------- //   
+	if (!TM_RTC_Init(TM_RTC_ClockSource_Internal)) {
+      }
+  //Set wakeup interrupt every 1 second
+    TM_RTC_Interrupts(TM_RTC_Int_1s);	 
+
+//----- config DS18B20-------- //
+	
+		TM_OneWire_Init(&OneWire1, GPIOD, GPIO_Pin_1);
+		TM_OneWire_First(&OneWire1);	
+		TM_OneWire_GetFullROM(&OneWire1, device[0]);
+		TM_DS18B20_SetResolution(&OneWire1, device[0], TM_DS18B20_Resolution_9bits);
+		TM_DS18B20_DisableAlarmTemperature(&OneWire1, device[0]);
+			
+//-------config SR04 --------- //
+		if (!TM_HCSR04_Init(&HCSR04, GPIOC, GPIO_PIN_1, GPIOC, GPIO_PIN_3)) {
+			while (1) {
+			TM_DISCO_LedToggle(LED_RED | LED_GREEN);
+			Delayms(100);
+			}
+		}
+// --------- config GPIO -------- //
+		TM_GPIO_Init(GPIOD,GPIO_PIN_2,TM_GPIO_Mode_OUT,TM_GPIO_OType_PP,TM_GPIO_PuPd_DOWN,TM_GPIO_Speed_High);
+		TM_GPIO_Init(GPIOD,GPIO_PIN_4,TM_GPIO_Mode_OUT,TM_GPIO_OType_PP,TM_GPIO_PuPd_DOWN,TM_GPIO_Speed_High);
+		TM_GPIO_Init(GPIOC,GPIO_PIN_11,TM_GPIO_Mode_OUT,TM_GPIO_OType_PP,TM_GPIO_PuPd_DOWN,TM_GPIO_Speed_High);
+		TM_GPIO_Init(GPIOC,GPIO_PIN_9,TM_GPIO_Mode_OUT,TM_GPIO_OType_PP,TM_GPIO_PuPd_DOWN,TM_GPIO_Speed_High);
+		TM_GPIO_Init(GPIOC,GPIO_PIN_7,TM_GPIO_Mode_OUT,TM_GPIO_OType_PP,TM_GPIO_PuPd_DOWN,TM_GPIO_Speed_High);
+	
+		Delayms(200);
+// -------config ESP8266-------- //
+		  TM_USART_Puts(USART2, "-------------------------------\r\n");
+
+		TM_USART_Puts(USART1, "AT+RST\r\n");																				Delayms(1000);
+			TM_USART_ClearBuffer(USART1);	
+		TM_USART_Puts(USART1, "AT+RESTORE\r\n");																		Delayms(1000);	
+			TM_USART_ClearBuffer(USART1);	
+		TM_USART_Puts(USART1, "AT+CWMODE=3\r\n");																		Delayms(1000);
+			TM_USART_ClearBuffer(USART1);	
+		TM_USART_Puts(USART1, "AT+CWJAP=\"@-TP-LINK-@\",\"ngongocduong\"\r\n");			Delayms(8000);
+			TM_USART_ClearBuffer(USART1);	
+		TM_USART_Puts(USART1, "AT+CIPMUX=1\r\n");																		Delayms(50);
+			TM_USART_ClearBuffer(USART1);	
+		TM_USART_Puts(USART1, "AT+CIPSERVER=1,80\r\n"); 														Delayms(50);
+			TM_USART_ClearBuffer(USART1);	
+		TM_USART_Puts(USART1, "AT+CIFSR\r\n");																			Delayms(1000);
+			TM_USART_ClearBuffer(USART1);		
+			f=50;x=0;y=0;z=0;flag_Feed=0;flag_Time1=0;flag_Time2=0;flag_RTC=0;flag_Aer=0;flag_Water=0;
+			h_F=25;m_F=61;d_E=8;h_E=25;m_E=61;a=0;b=0;
+
+	while (1) {
+// ------ Start temperature conversion on devices on one bus ------- //
+		TM_DS18B20_Start(&OneWire1,device[0]);		
+		while (!TM_DS18B20_AllDone(&OneWire1));	               // Wait until all are done on one onewire port 			
+		if(	TM_DS18B20_Read(&OneWire1, device[0], &temps[0]))  // Read temperature from ROM address and store it to temps variable 
+		{		
+				sprintf(buf, "%2.1f",temps[0]);										 // Print temperature 	
+//				TM_USART_Puts(USART2, buf);
+		}
+
+	// Begin sent request to webserver		
+		TM_USART_Puts(USART1, "AT+CIPSTART=3,\"TCP\",\"webesp8266v12.pe.hu\",80\r\n");			 Delayms(1000);   
+			TM_USART_ClearBuffer(USART1);	
+		TM_USART_Puts(USART1, "AT+CIPSEND=3,68\r\n");																				 Delayms(1000);
+			TM_USART_ClearBuffer(USART1);
+		TM_USART_Puts(USART1, "GET /new1.php?vartemp="); 
+			TM_USART_Puts(USART1, buf);		
+		TM_USART_Puts(USART1," HTTP/1.0\r\n");																	 Delayms(2000);
+			TM_USART_ClearBuffer(USART1);																											 Delayms(200);
+		TM_USART_Puts(USART1, "Host: webesp8266v12.pe.hu\r\n\r\n\r\n");											 Delayms(4000);
+		TM_USART_Puts(USART1, "AT+CIPCLOSE=3\r\n");																					 Delayms(2000);
+	
+// a sentence that begin with <html> means one command, use only the first 60 character  			
+		if (TM_USART_Gets(USART1, mybuffer, sizeof(mybuffer))) {														Delayms(100);
+			for(i=0;i<60;i++){		
+				REP[i] = mybuffer[i+200];							//  save reply to REP[] 
+			}	
+
+//			for(i = 0; i < 60; i++){					
+//			TM_USART_Putc(USART2,REP[i]);	
+//			}
+//------ GET TEMPERATURE ------	//			
+			for(j = 0; j < 60; j++){		
+				if(REP[j] == 't' && REP[j + 1] == 'u' && REP[j + 2] == 'r' && REP[j + 3] == 'e'){
+					TEMP[0] = REP[j+6];
+					TEMP[1] = REP[j+7];
+//					TM_USART_Puts(USART2,"------WWW------");
+//					TM_USART_Puts(USART2,TEMP);
+					f = atoi(TEMP);
+					break;
+				}	
+			}	
+//------ GET TIME TO FEED -------//
+			for(j = 0; j < 61; j++){
+				if(REP[j] == 'f' && REP[j + 1] == 'e' && REP[j + 2] == 'e'&& REP[j + 3] == 'd' ){	
+					Tm0[0] = REP[j+9];
+					Tm0[1] = REP[j+10];
+					Tm1[0] = REP[j+12];
+					Tm1[1] = REP[j+13];
+					h_F = atoi(Tm0);	
+					m_F = atoi(Tm1);
+				
+					break;
+			}
+		}
+//------- GET TIME WATER EXCHANGE -------//		
+			for(j = 0; j < 61; j++){
+				if(REP[j] == 'a' && REP[j + 1] == 't' && REP[j + 2] == 'e'&& REP[j + 3] == 'r'&& flag_Water==0){	
+					TIME0[0] = REP[j+6];
+					TIME1[0] = REP[j+8];
+					TIME1[1] = REP[j+9];
+					TIME2[0] = REP[j+11];
+					TIME2[1] = REP[j+12];
+					d_E = atoi(TIME0);	
+					h_E = atoi(TIME1);		
+					m_E = atoi(TIME2);
+					y=0;z=0;flag_Water=1;
+         					
+				break;
+			}
+		}
+
+//------ BUTTON on Feed ------ //
+			if (strstr(REP,onfeed)) {
+				flag_Feed=1; 	
+			}
+
+//------ BUTTON off Feed ------ //
+			if (strstr(REP,offeed)) {
+				flag_Feed=0; 
+
+			}
+//------ BUTTON on Aeration ------ //
+			if (strstr(REP,onaer)) {
+				flag_Aer=1;	
+			}
+
+//------ BUTTON off Aeration ------ //
+			if (strstr(REP,offaer)) {
+				flag_Aer=0;		
+			}
+
+//------ BUTTON SET TIME --------//	
+			if (strstr(REP,set_time)&& flag_RTC==0) {
+          datatime.hours = 0;
+          datatime.minutes = 0;
+          datatime.seconds = 0;
+          datatime.year = 16;
+          datatime.month = 11;
+          datatime.date = 13;
+          datatime.day = 6;
+				  TM_RTC_SetDateTime(&datatime, TM_RTC_Format_BIN);
+					flag_RTC=1; // set flag_RTC
+		
+			}	
+
+
+//------ BUTTON RESET ------ //
+			if (strstr(REP,reset)) {
+       flag_RTC=0;flag_Water=0;
+		
+			}
+
+		}
+
+// ++++++ Control fan ++++++ //
+		if( temps[0]> f ){	TM_DISCO_LedOn(LED_ORANGE);TM_GPIO_SetPinHigh(GPIOC,GPIO_PIN_9); }    // on pin C9
+		if(temps[0]< (f-1)) {TM_DISCO_LedOff(LED_ORANGE);TM_GPIO_SetPinLow(GPIOC,GPIO_PIN_9); }									// off pin C9
+
+// +++++++ Begin feeding ++++++ //	
+		// control by alarm
+		if(	datatime.hours == h_F && 	datatime.minutes == m_F ){flag_Feed=1;}
+		if(	datatime.hours == h_F && 	datatime.minutes == m_F+1 ){flag_Feed=0;}
+		if(	datatime.hours == h_F && 	datatime.minutes == m_F+3 ){flag_Feed=1;}
+		if(	datatime.hours == h_F && 	datatime.minutes == m_F+4 ){flag_Feed=0;}
+    // control by button
+    if( flag_Feed==1) { TM_DISCO_LedOn(LED_BLUE);TM_GPIO_SetPinHigh(GPIOC,GPIO_PIN_7); }			 // on pin C7
+    if( flag_Feed==0 ) { TM_DISCO_LedOff(LED_BLUE);TM_GPIO_SetPinLow(GPIOC,GPIO_PIN_7); }      // off pin C7
+
+// +++++++ BEGIN WATER EXCHANGE	+++++++ //	
+		
+		if( datatime.day == d_E && datatime.hours == h_E && datatime.minutes == m_E && datatime.seconds < 30 ){x=1;} Delayms(50);
+		if(x==1){
+				TM_HCSR04_Read(&HCSR04);	
+        if (HCSR04.Distance <=5 && y==0) {
+					TM_DISCO_LedOff(LED_GREEN);  TM_GPIO_SetPinLow(GPIOC,GPIO_PIN_11); // off pin1
+					TM_DISCO_LedOn(LED_RED);	TM_GPIO_SetPinHigh(GPIOD,GPIO_PIN_2);	   // on pin2
+					z=1;
+				}
+		
+        if(HCSR04.Distance >=15 && z==1){
+					TM_DISCO_LedOn(LED_RED|LED_GREEN);					// on pin1 & pin2
+					TM_GPIO_SetPinHigh(GPIOC,GPIO_PIN_11);
+					TM_GPIO_SetPinHigh(GPIOD,GPIO_PIN_2);
+					y=1;
+				}
+		
+				if ( HCSR04.Distance >8 && z==0){
+					TM_DISCO_LedOn(LED_GREEN);	TM_GPIO_SetPinHigh(GPIOC,GPIO_PIN_11);		// on pin1
+					TM_DISCO_LedOff(LED_RED);   TM_GPIO_SetPinLow(GPIOD,GPIO_PIN_2);   // off pin2
+					y=1;
+				}
+				
+				if (HCSR04.Distance <=5 && y==1){
+					TM_DISCO_LedOff(LED_GREEN|LED_RED);  // off pin1 & pin2
+					TM_GPIO_SetPinLow(GPIOC,GPIO_PIN_11); 
+					TM_GPIO_SetPinLow(GPIOD,GPIO_PIN_2); 
+					x=0;y=0;z=0;
+				}
+			Delayms(50);
+   }  
+// +++++  control Aeration +++++ //
+    if( flag_Aer==1 ) { TM_DISCO_LedOn(LED_BLUE);TM_GPIO_SetPinHigh(GPIOD,GPIO_PIN_4); }	
+    if( flag_Aer==0 ) { TM_DISCO_LedOff(LED_BLUE);TM_GPIO_SetPinLow(GPIOD,GPIO_PIN_4); }
+		
+ }
+}
+// ----- RTC ------ //
+		void TM_RTC_RequestHandler() {
+    
+    TM_RTC_GetDateTime(&datatime, TM_RTC_Format_BIN);           					//Get time  
+      sprintf(Ti_buf, "%02d.%02d.%04d %02d:%02d:%02d  Unix: %u\n",  		//Format time
+                datatime.date,
+                datatime.month,
+                datatime.year + 2000,
+                datatime.hours,
+                datatime.minutes,
+                datatime.seconds,
+                datatime.unix
+    );
+			
+    TM_USART_Puts(USART2, Ti_buf); 				 //Send to USART		
+			
+   }
+	
